@@ -4,13 +4,12 @@
 #   /Users/kim/Desktop/project/6
 #   /Users/kim/Desktop/project/8
 #
-# After adding folders for 1, 3, and 5, change classes to:
-#   [1, 3, 5, 6, 8]
+# Training now uses the prepared digit folders for 1, 3, 5, 6, and 8.
 
 dataset_generation:
   source_root: ..
   output_dir: datasets/yolo
-  classes: [6, 8]
+  classes: [1, 3, 5, 6, 8]
   train_per_class: 120
   val_per_class: 30
   imgsz: 640
@@ -24,7 +23,7 @@ dataset_generation:
 
 training:
   data: yolo/dataset.yaml
-  model: yolov8n.pt
+  model: yolo11n.pt
   epochs: 100
   imgsz: 640
   batch: 16
