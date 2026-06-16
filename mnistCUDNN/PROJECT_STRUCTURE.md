@@ -12,11 +12,23 @@ mnistCUDNN/
 ├── run_pgm_all.sh
 ├── yolo/
 │   ├── config.yaml
+│   ├── dataset.yaml
 │   ├── detect_video.py
 │   ├── dedupe.py
+│   ├── make_yolo_dataset.py
 │   ├── save_pgm.py
+│   ├── train_yolo.py
+│   ├── train_config.yaml
 │   └── weights/
 │       └── best.pt
+├── datasets/
+│   └── yolo/
+│       ├── images/
+│       │   ├── train/
+│       │   └── val/
+│       └── labels/
+│           ├── train/
+│           └── val/
 ├── scripts/
 │   ├── clean_outputs.sh
 │   ├── parse_mnist_output.py

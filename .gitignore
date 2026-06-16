@@ -1,6 +1,7 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+*.mp4
 
 mnistCUDNN/__pycache__/
 mnistCUDNN/**/__pycache__/
@@ -8,6 +9,11 @@ mnistCUDNN/*.o
 mnistCUDNN/a.out
 mnistCUDNN/test.c
 mnistCUDNN/mnistCUDNN
+mnistCUDNN/runs/
+mnistCUDNN/datasets/yolo/images/**/*.jpg
+mnistCUDNN/datasets/yolo/images/**/*.jpeg
+mnistCUDNN/datasets/yolo/images/**/*.png
+mnistCUDNN/datasets/yolo/labels/**/*.txt
 mnistCUDNN/pgm_output/*.pgm
 mnistCUDNN/**/*.log
 mnistCUDNN/yolo/debug_crops/

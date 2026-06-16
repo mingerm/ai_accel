@@ -1,0 +1,43 @@
+# Shared config for YOLO dataset generation and training.
+#
+# You currently have source folders:
+#   /Users/kim/Desktop/project/6
+#   /Users/kim/Desktop/project/8
+#
+# After adding folders for 1, 3, and 5, change classes to:
+#   [1, 3, 5, 6, 8]
+
+dataset_generation:
+  source_root: ..
+  output_dir: datasets/yolo
+  classes: [6, 8]
+  train_per_class: 120
+  val_per_class: 30
+  imgsz: 640
+  min_digit_frac: 0.18
+  max_digit_frac: 0.55
+  max_rotate: 14.0
+  seed: 0
+  jpeg_quality: 95
+  include_builtins: true
+  allow_missing_classes: false
+
+training:
+  data: yolo/dataset.yaml
+  model: yolov8n.pt
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  device: ""
+  workers: 4
+  project: runs/digit_yolo
+  name: train
+  patience: 30
+  optimizer: auto
+  lr0:
+  seed: 0
+  cache: false
+  exist_ok: false
+  resume: false
+  close_mosaic: 10
+  copy_best_to: yolo/weights/best.pt

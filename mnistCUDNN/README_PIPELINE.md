@@ -24,6 +24,42 @@ answers=(6 8 8 6)
 chmod +x run_pgm_all.sh scripts/*.sh
 ```
 
+## Train YOLO
+
+First generate a YOLO-format dataset from digit source images. The script looks
+for digit folders such as `../6/` and `../8/` when run from `mnistCUDNN/`, and
+also uses the built-in `1`, `3`, and `5` sample PGM files.
+
+```bash
+python3 yolo/make_yolo_dataset.py
+```
+
+Dataset generation options are read from `yolo/train_config.yaml`.
+
+Put YOLO-format training data under `datasets/yolo/`:
+
+```text
+datasets/yolo/images/train/
+datasets/yolo/images/val/
+datasets/yolo/labels/train/
+datasets/yolo/labels/val/
+```
+
+Each label file must use normalized YOLO boxes:
+
+```text
+class_id x_center y_center width height
+```
+
+Then run:
+
+```bash
+python3 yolo/train_yolo.py
+```
+
+The script copies the best checkpoint to `yolo/weights/best.pt` by default, so
+`./run_pgm_all.sh` can use it directly.
+
 ## Run
 
 ```bash

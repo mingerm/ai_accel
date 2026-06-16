@@ -112,6 +112,53 @@ PGM_OUTPUT_DIR=pgm_output ./run_pgm_all.sh
 python3 yolo/detect_video.py --config yolo/config.yaml
 ```
 
+## `yolo/make_yolo_dataset.py`
+
+숫자별 원본 이미지 폴더에서 YOLO 학습 데이터를 자동 생성하는 스크립트입니다.
+`mnistCUDNN/`에서 실행하면 기본적으로 상위 폴더의 `6/`, `8/` 같은 숫자 폴더를
+찾습니다. 기존 샘플 `one_28x28.pgm`, `three_28x28.pgm`, `five_28x28.pgm`도
+각각 1, 3, 5 원본으로 사용할 수 있습니다.
+
+```bash
+python3 yolo/make_yolo_dataset.py
+```
+
+생성 결과는 `datasets/yolo/images/{train,val}`과
+`datasets/yolo/labels/{train,val}`에 저장됩니다. bbox 라벨은 합성된 숫자의
+위치에서 자동 계산됩니다. 데이터 생성 옵션은 `yolo/train_config.yaml`의
+`dataset_generation`에서 바꿉니다.
+
+## `yolo/train_yolo.py`
+
+손글씨 숫자 검출용 YOLO 모델을 학습하는 스크립트입니다.
+
+학습 데이터는 `yolo/dataset.yaml`이 가리키는 위치에 둡니다.
+
+```text
+datasets/yolo/images/train/
+datasets/yolo/images/val/
+datasets/yolo/labels/train/
+datasets/yolo/labels/val/
+```
+
+라벨 파일은 이미지와 같은 이름의 `.txt` 파일이며, 각 줄은 YOLO 형식입니다.
+
+```text
+class_id x_center y_center width height
+```
+
+좌표는 이미지 크기로 나눈 0~1 정규화 값이어야 합니다.
+
+기본 학습 명령은 다음과 같습니다.
+
+```bash
+python3 yolo/train_yolo.py
+```
+
+학습 결과 중 `best.pt`는 기본적으로 `yolo/weights/best.pt`로 복사됩니다. 따라서
+학습 후 별도 경로 수정 없이 `./run_pgm_all.sh`에서 사용할 수 있습니다. 학습
+옵션은 `yolo/train_config.yaml`의 `training`에서 바꿉니다.
+
 ## `yolo/config.yaml`
 
 YOLO 감지와 PGM 저장에 필요한 설정 파일입니다.
