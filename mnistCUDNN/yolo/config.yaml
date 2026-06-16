@@ -1,0 +1,22 @@
+video: videos/input.mp4
+weights: yolo/weights/best.pt
+output_dir: pgm_output
+
+confidence: 0.45
+iou: 0.45
+imgsz: 640
+device: ""
+selection: center_conf
+
+target_size: 28
+digit_box_size: 20
+bbox_padding: 0.18
+
+min_stable_frames: 2
+missing_frames_to_close_segment: 5
+min_frames_between_saves: 8
+
+allow_same_label_motion_split: false
+same_label_center_distance: 0.45
+
+save_debug_crops: false

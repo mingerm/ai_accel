@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+mnistCUDNN/__pycache__/
+mnistCUDNN/**/__pycache__/
+mnistCUDNN/*.o
+mnistCUDNN/a.out
+mnistCUDNN/test.c
+mnistCUDNN/mnistCUDNN
+mnistCUDNN/pgm_output/*.pgm
+mnistCUDNN/**/*.log
+mnistCUDNN/yolo/debug_crops/
