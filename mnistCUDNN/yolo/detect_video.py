@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -23,16 +24,22 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
 
-    video_path = Path(args.video or str(config.get("video", "videos/input.mp4")))
+    source = choose_source(args, config)
     weights_path = Path(args.weights or str(config.get("weights", "yolo/weights/best.pt")))
     output_dir = Path(args.output_dir or str(config.get("output_dir", "pgm_output")))
     expected_count = args.expected_count
+    display = args.display if args.display is not None else as_bool(config.get("display", True))
+    window_title = str(config.get("window_title", "YOLO Live"))
+    camera_width = int(config.get("camera_width", 0) or 0)
+    camera_height = int(config.get("camera_height", 0) or 0)
+    camera_fps = int(config.get("camera_fps", 0) or 0)
+    max_frames = int(config.get("max_frames", 0) or 0)
 
     if YOLO is None:
         print(f"ERROR: ultralytics is not installed: {YOLO_IMPORT_ERROR}", file=sys.stderr)
         return 2
-    if not video_path.exists():
-        print(f"ERROR: video not found: {video_path}", file=sys.stderr)
+    if isinstance(source, Path) and not source.exists():
+        print(f"ERROR: video/source file not found: {source}", file=sys.stderr)
         return 2
     if not weights_path.exists():
         print(f"ERROR: YOLO weights not found: {weights_path}", file=sys.stderr)
@@ -41,9 +48,16 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model = YOLO(str(weights_path))
-    capture = cv2.VideoCapture(str(video_path))
+    capture_source = int(source) if isinstance(source, int) else str(source)
+    capture = cv2.VideoCapture(capture_source)
+    if camera_width > 0:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+    if camera_height > 0:
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
+    if camera_fps > 0:
+        capture.set(cv2.CAP_PROP_FPS, camera_fps)
     if not capture.isOpened():
-        print(f"ERROR: could not open video: {video_path}", file=sys.stderr)
+        print(f"ERROR: could not open source: {source}", file=sys.stderr)
         return 2
 
     tracker = SegmentTracker(
@@ -56,6 +70,7 @@ def main() -> int:
 
     frame_index = 0
     saved = 0
+    prev_time = 0.0
     confidence = float(config.get("confidence", 0.45))
     iou = float(config.get("iou", 0.45))
     imgsz = int(config.get("imgsz", 640))
@@ -82,6 +97,10 @@ def main() -> int:
         height, width = frame.shape[:2]
         decision = tracker.update(detection, width, height)
 
+        now = time.time()
+        fps = 1.0 / (now - prev_time) if prev_time else 0.0
+        prev_time = now
+
         if decision.should_save and detection is not None:
             crop = crop_digit(frame, detection.bbox, padding=bbox_padding)
             pgm_image = digit_to_mnist_pgm(
@@ -104,11 +123,47 @@ def main() -> int:
             if expected_count is not None and saved >= expected_count:
                 break
 
+        if display:
+            annotated = draw_live_frame(frame, detection, fps, saved)
+            try:
+                cv2.imshow(window_title, annotated)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            except cv2.error as exc:
+                print(f"WARNING: display disabled: {exc}", file=sys.stderr)
+                display = False
+
         frame_index += 1
+        if max_frames > 0 and frame_index >= max_frames:
+            break
 
     capture.release()
+    if display:
+        cv2.destroyAllWindows()
     print(f"YOLO summary: frames={frame_index} saved={saved} output_dir={output_dir}")
     return 0
+
+
+def choose_source(args: argparse.Namespace, config: Dict[str, Any]) -> int | Path:
+    raw_source: Any
+    if args.source is not None:
+        raw_source = args.source
+    elif args.video is not None:
+        raw_source = args.video
+    elif "source" in config:
+        raw_source = config.get("source")
+    else:
+        raw_source = config.get("video", 0)
+
+    if isinstance(raw_source, int):
+        return raw_source
+
+    text = str(raw_source).strip()
+    if text.startswith("camera:"):
+        return int(text.split(":", 1)[1])
+    if text.isdigit():
+        return int(text)
+    return Path(text)
 
 
 def detect_one(
@@ -151,6 +206,43 @@ def detect_one(
     return select_detection(detections, frame.shape[1], frame.shape[0], selection)
 
 
+def draw_live_frame(frame: Any, detection: Optional[Detection], fps: float, saved: int) -> Any:
+    annotated = frame.copy()
+    if detection is not None:
+        x1, y1, x2, y2 = [int(round(v)) for v in detection.bbox]
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        label = f"{detection.label} {detection.confidence:.2f}"
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(24, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            2,
+        )
+
+    cv2.putText(
+        annotated,
+        f"FPS: {fps:.2f}",
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0, 255, 0),
+        2,
+    )
+    cv2.putText(
+        annotated,
+        f"Saved: {saved}   q: finish",
+        (20, 78),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 255),
+        2,
+    )
+    return annotated
+
+
 def select_detection(
     detections: Iterable[Detection],
     frame_width: int,
@@ -188,10 +280,14 @@ def class_to_digit(cls_id: int, names: Dict[int, str]) -> Optional[int]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Detect handwritten digits and save MNIST PGM crops.")
     parser.add_argument("--config", default="yolo/config.yaml")
+    parser.add_argument("--source", default=None, help="Camera index like 0, camera:0, or a video path.")
     parser.add_argument("--video", default=None)
     parser.add_argument("--weights", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--expected-count", type=int, default=None)
+    parser.add_argument("--display", dest="display", action="store_true")
+    parser.add_argument("--no-display", dest="display", action="store_false")
+    parser.set_defaults(display=None)
     return parser.parse_args()
 
 

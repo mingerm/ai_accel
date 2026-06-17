@@ -76,10 +76,11 @@ else ifneq ($(TARGET_ARCH),$(HOST_ARCH))
     endif
 endif
 HOST_COMPILER ?= g++
-#MY CODE START
-# NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
-NVCC := /usr/local/cuda/bin/nvcc
-#MY CODE END
+ifneq (,$(wildcard $(CUDA_PATH)/bin/nvcc))
+NVCC ?= $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
+else
+NVCC ?= nvcc -ccbin $(HOST_COMPILER)
+endif
 
 # internal flags
 NVCCFLAGS   := -m${TARGET_SIZE}
@@ -144,26 +145,13 @@ LIBRARIES :=
 
 ################################################################################
 
-# Gencode arguments
-SMS := 80 86 87
+# Gencode arguments. Jetson Orin Nano is SM 87; override with `make SMS=...` if needed.
+SMS ?= 87
 
 ifeq ($(SMS),)
 $(info >>> WARNING - no SM architectures have been specified - waiving sample <<<)
 SAMPLE_ENABLED := 0
 endif
-
-# MY CODE START
-# ifeq ($(GENCODE_FLAGS),)
-# # Generate SASS code for each SM architecture listed in $(SMS)
-# $(foreach sm,$(SMS),$(eval GENCODE_FLAGS += -gencode arch=compute_$(sm),code=sm_$(sm)))
-
-# # Generate PTX code from the highest SM architecture in $(SMS) to guarantee forward-compatibility
-# HIGHEST_SM := $(lastword $(sort $(SMS)))
-# ifneq ($(HIGHEST_SM),)
-# GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
-# endif
-# endif
-SMS := 80 86  # 추가
 
 ifeq ($(GENCODE_FLAGS),)
 # Generate SASS code for each SM architecture listed in $(SMS)
@@ -175,7 +163,6 @@ ifneq ($(HIGHEST_SM),)
 GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
 endif
 endif
-# MY CODE END
 
 INCLUDES += -IFreeImage/include
 LIBRARIES += -LFreeImage/lib/$(TARGET_OS)/$(TARGET_ARCH) -LFreeImage/lib/$(TARGET_OS) -lcudart -lcublas -lcudnn -lfreeimage -lstdc++ -lm

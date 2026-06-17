@@ -36,7 +36,15 @@ def main() -> int:
         )
         return 2
 
-    result = subprocess.run([str(mnist_bin), f"image={image_path}"], cwd=root_dir)
+    command = [str(mnist_bin), f"image={image_path}"]
+    profile_csv = os.environ.get("MNIST_PROFILE_CSV")
+    if profile_csv:
+        command.append(f"profile={profile_csv}")
+    profile_phase = os.environ.get("MNIST_PROFILE_PHASE")
+    if profile_phase:
+        command.append(f"phase={profile_phase}")
+
+    result = subprocess.run(command, cwd=root_dir)
     return result.returncode
 
 

@@ -7,7 +7,11 @@ cd "$ROOT_DIR"
 CONFIG="${YOLO_CONFIG:-yolo/config.yaml}"
 ARGS=(--config "$CONFIG")
 
-if [[ -n "${VIDEO_PATH:-}" ]]; then
+if [[ -n "${YOLO_SOURCE:-}" ]]; then
+  ARGS+=(--source "$YOLO_SOURCE")
+elif [[ -n "${CAMERA_INDEX:-}" ]]; then
+  ARGS+=(--source "$CAMERA_INDEX")
+elif [[ -n "${VIDEO_PATH:-}" ]]; then
   ARGS+=(--video "$VIDEO_PATH")
 fi
 

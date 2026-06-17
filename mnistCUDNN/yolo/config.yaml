@@ -1,4 +1,6 @@
-video: videos/input.mp4
+# Default demo input is a live camera. Use 0 for /dev/video0, camera:1 for
+# another camera, or set YOLO_SOURCE/VIDEO_PATH when running the shell script.
+source: 0
 weights: yolo/weights/best.pt
 output_dir: pgm_output
 
@@ -7,6 +9,12 @@ iou: 0.45
 imgsz: 640
 device: ""
 selection: center_conf
+display: true
+window_title: YOLO Live
+camera_width: 0
+camera_height: 0
+camera_fps: 0
+max_frames: 0
 
 target_size: 28
 digit_box_size: 20
