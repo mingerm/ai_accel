@@ -43,6 +43,8 @@ source = (
     or data.get("video")
     or "0"
 )
+image_path = os.environ.get("IMAGE_PATH") or data.get("image_path")
+image_dir = os.environ.get("IMAGE_DIR") or data.get("image_dir")
 weights = os.environ.get("YOLO_WEIGHTS") or data.get("weights") or "yolo/weights/best.pt"
 out_dir = os.environ.get("PGM_OUTPUT_DIR") or data.get("output_dir") or "pgm_output"
 
@@ -50,13 +52,20 @@ def resolve(path: str) -> Path:
     value = Path(path)
     return value if value.is_absolute() else root / value
 
-source_text = str(source).strip()
-if source_text.startswith("camera:") or source_text.isdigit():
-    print(source_text)
-    print("camera")
+if image_path:
+    print(resolve(str(image_path)))
+    print("image")
+elif image_dir:
+    print(resolve(str(image_dir)))
+    print("image_dir")
 else:
-    print(resolve(source_text))
-    print("file")
+    source_text = str(source).strip()
+    if source_text.startswith("camera:") or source_text.isdigit():
+        print(source_text)
+        print("camera")
+    else:
+        print(resolve(source_text))
+        print("file")
 print(resolve(str(weights)))
 print(resolve(str(out_dir)))
 PY
@@ -112,15 +121,17 @@ source_kind="${resolved_paths[1]}"
 weights_path="${resolved_paths[2]}"
 output_dir="${resolved_paths[3]}"
 
-if [[ "$source_kind" == "file" ]]; then
-  [[ -f "$source_value" ]] || fail "demo video/source file not found: $source_value"
+if [[ "$source_kind" == "file" || "$source_kind" == "image" ]]; then
+  [[ -f "$source_value" ]] || fail "demo input file not found: $source_value"
+elif [[ "$source_kind" == "image_dir" ]]; then
+  [[ -d "$source_value" ]] || fail "demo image directory not found: $source_value"
 fi
 [[ -f "$weights_path" ]] || fail "YOLO weights not found: $weights_path"
 mkdir -p "$output_dir"
 
 build_mnist_if_needed
 
-info "source: $source_value ($source_kind)"
+info "input: $source_value ($source_kind)"
 info "weights: $weights_path"
 info "output_dir: $output_dir"
 info "preflight complete"

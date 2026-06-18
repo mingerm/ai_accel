@@ -73,8 +73,22 @@ evaluates only the first `answers` count of PGM files.
 
 ```bash
 VIDEO_PATH=/path/to/demo.mp4 ./run_pgm_all.sh
+IMAGE_DIR=/path/to/image_folder ./run_pgm_all.sh
+IMAGE_PATH=/path/to/image.jpg ./run_pgm_all.sh
 YOLO_WEIGHTS=/path/to/best.pt ./run_pgm_all.sh
 PGM_OUTPUT_DIR=pgm_output ./run_pgm_all.sh
+```
+
+For nested image folders, enable recursive image search:
+
+```bash
+IMAGE_DIR=/path/to/image_folder IMAGE_RECURSIVE=1 ./run_pgm_all.sh
+```
+
+You can also run only the YOLO image-to-PGM step:
+
+```bash
+python3 yolo/detect_images.py --image-dir /path/to/image_folder --output-dir pgm_output
 ```
 
 ## MNIST Runner Detection
