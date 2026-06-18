@@ -91,6 +91,50 @@ You can also run only the YOLO image-to-PGM step:
 python3 yolo/detect_images.py --image-dir /path/to/image_folder --output-dir pgm_output
 ```
 
+## Train EMNIST LeNet Weights
+
+The C++ runner reads raw float32 weight files from `data/*.bin`. Train a
+compatible LeNet model in PyTorch, then export those files:
+
+```bash
+python3 -m pip install -r requirements-training.txt
+python3 scripts/train_emnist_lenet.py \
+  --download \
+  --augment \
+  --epochs 10 \
+  --export-dir trained_weights/emnist_digits \
+  --overwrite
+```
+
+To mix in labeled project images, place them in digit folders such as
+`custom_digits/1/`, `custom_digits/3/`, `custom_digits/5/`, `custom_digits/6/`,
+and `custom_digits/8/`, or use YOLO PGM filenames containing `digit_8`.
+
+```bash
+python3 scripts/train_emnist_lenet.py \
+  --download \
+  --augment \
+  --extra-data-root custom_digits \
+  --eval-data-root custom_digits \
+  --epochs 10 \
+  --export-dir trained_weights/emnist_custom \
+  --overwrite
+```
+
+After checking metrics, export directly into the runtime `data/` directory:
+
+```bash
+python3 scripts/train_emnist_lenet.py \
+  --download \
+  --augment \
+  --extra-data-root custom_digits \
+  --eval-data-root custom_digits \
+  --epochs 10 \
+  --export-dir data \
+  --backup-existing \
+  --overwrite
+```
+
 ## MNIST Runner Detection
 
 `scripts/run_mnist_one.sh` tries the following order:
