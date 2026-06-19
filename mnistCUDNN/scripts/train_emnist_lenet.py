@@ -5,13 +5,14 @@ import json
 import random
 import re
 import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 import torch
 from torch import nn
@@ -70,34 +71,50 @@ class ExtraDigitDataset(Dataset[Tuple[torch.Tensor, int]]):
         self,
         root: Path,
         auto_crop: bool = True,
+        preprocess: str = "auto",
+        orientation: str = "exif",
+        transform: Callable[[Image.Image], torch.Tensor] | None = None,
         recursive: bool = True,
         cache: bool = True,
     ) -> None:
         self.samples = collect_digit_samples(root, recursive=recursive)
         self.auto_crop = auto_crop
-        self.cached_samples: List[Tuple[torch.Tensor, int]] | None = None
+        self.preprocess = preprocess
+        self.orientation = orientation
+        self.transform = transform
+        self.cached_images: List[Tuple[Image.Image, int]] | None = None
         if not self.samples:
             raise ValueError(f"no labeled digit images found under {root}")
         if cache:
-            self.cached_samples = [self.load_sample(path, label) for path, label in self.samples]
+            self.cached_images = [self.load_image(path, label) for path, label in self.samples]
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
-        if self.cached_samples is not None:
-            image, label = self.cached_samples[index]
-            return image.clone(), label
-        return self.load_sample(*self.samples[index])
-
-    def load_sample(self, path: Path, label: int) -> Tuple[torch.Tensor, int]:
-        image = Image.open(path).convert("L")
-        if self.auto_crop:
-            image = mnist_like_image(image)
+        if self.cached_images is not None:
+            image, label = self.cached_images[index]
+            image = image.copy()
         else:
-            image = image.resize((28, 28), Image.Resampling.BILINEAR)
+            image, label = self.load_image(*self.samples[index])
+
+        if self.transform is not None:
+            return self.transform(image), label
+
         array = np.asarray(image, dtype=np.float32) / 255.0
         return torch.from_numpy(array).unsqueeze(0), label
+
+    def load_image(self, path: Path, label: int) -> Tuple[Image.Image, int]:
+        with Image.open(path) as source:
+            image = source.copy()
+        if self.orientation == "exif":
+            image = ImageOps.exif_transpose(image)
+        image = image.convert("L")
+        if self.auto_crop:
+            image = mnist_like_image(image, mode=self.preprocess)
+        else:
+            image = image.resize((28, 28), Image.Resampling.BILINEAR)
+        return image, label
 
 
 @dataclass
@@ -111,6 +128,14 @@ def main() -> int:
     args = parse_args()
     project_root = Path(__file__).resolve().parents[1]
     set_seed(args.seed)
+
+    if args.preview_extra_dir:
+        roots = args.extra_data_root or args.eval_data_root
+        if not roots:
+            raise ValueError("--preview-extra-dir requires --extra-data-root or --eval-data-root")
+        export_extra_previews(roots, args, resolve_project_path(args.preview_extra_dir, project_root))
+        if args.preview_only:
+            return 0
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"device: {device}")
@@ -136,6 +161,8 @@ def main() -> int:
         dataset = ExtraDigitDataset(
             Path(eval_root),
             auto_crop=not args.no_extra_auto_crop,
+            preprocess=args.extra_preprocess,
+            orientation=args.extra_orientation,
             cache=not args.no_extra_cache,
         )
         eval_loaders.append(
@@ -146,6 +173,15 @@ def main() -> int:
         )
 
     model = LeNetForCUDNN().to(device)
+    if args.init_bin_dir:
+        init_bin_dir = resolve_project_path(args.init_bin_dir, project_root)
+        load_bins(model, init_bin_dir)
+        print(f"loaded initial weights: {init_bin_dir}")
+        if args.eval_initial:
+            print("initial evaluation:")
+            for name, loader in eval_loaders:
+                print_metrics(name, evaluate(model, loader, device))
+
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step, gamma=args.lr_gamma)
 
@@ -187,6 +223,13 @@ def main() -> int:
         metrics = evaluate(model, loader, device)
         final_metrics[name] = metrics_to_dict(metrics)
         print_metrics(name, metrics)
+
+    if final_metrics["emnist_test"]["accuracy"] < args.min_test_accuracy:
+        raise RuntimeError(
+            "EMNIST test accuracy "
+            f"{final_metrics['emnist_test']['accuracy']:.4f} is below --min-test-accuracy "
+            f"{args.min_test_accuracy:.4f}; refusing to export weights"
+        )
 
     export_dir = Path(args.export_dir)
     if not export_dir.is_absolute():
@@ -232,10 +275,14 @@ def build_datasets(args: argparse.Namespace) -> Tuple[Dataset[Tuple[torch.Tensor
     )
 
     datasets_to_concat: List[Dataset[Tuple[torch.Tensor, int]]] = [train_dataset]
+    extra_transform = build_extra_transform(args, train=True)
     for extra_root in args.extra_data_root:
         extra_dataset = ExtraDigitDataset(
             Path(extra_root),
             auto_crop=not args.no_extra_auto_crop,
+            preprocess=args.extra_preprocess,
+            orientation=args.extra_orientation,
+            transform=extra_transform,
             cache=not args.no_extra_cache,
         )
         print(f"extra dataset: {extra_root} samples={len(extra_dataset)} repeat={args.extra_repeat}")
@@ -263,6 +310,23 @@ def build_emnist_transform(args: argparse.Namespace, train: bool) -> transforms.
         )
     ops.append(transforms.ToTensor())
     return transforms.Compose(ops)
+
+
+def build_extra_transform(args: argparse.Namespace, train: bool) -> transforms.Compose | None:
+    if not train or not args.extra_augment:
+        return None
+    return transforms.Compose(
+        [
+            transforms.RandomAffine(
+                degrees=args.extra_augment_degrees,
+                translate=(args.extra_augment_translate, args.extra_augment_translate),
+                scale=(1.0 - args.extra_augment_scale, 1.0 + args.extra_augment_scale),
+                shear=args.extra_augment_shear,
+                fill=0,
+            ),
+            transforms.ToTensor(),
+        ]
+    )
 
 
 def fix_emnist_orientation(image: Image.Image) -> Image.Image:
@@ -353,11 +417,14 @@ def collect_digit_samples(root: Path, recursive: bool) -> List[Tuple[Path, int]]
     if not root.exists():
         raise FileNotFoundError(root)
 
+    root_label = parse_digit_label(root.name)
     root_pattern = "**/*" if recursive else "*"
     for path in sorted(root.glob(root_pattern)):
         if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
             continue
         label = parse_digit_label_from_filename(path.name)
+        if label is None:
+            label = root_label
         if label is not None:
             samples.append((path, label))
             seen.add(path)
@@ -376,6 +443,47 @@ def collect_digit_samples(root: Path, recursive: bool) -> List[Tuple[Path, int]]
                 samples.append((path, label))
                 seen.add(path)
     return samples
+
+
+def export_extra_previews(roots: Sequence[str], args: argparse.Namespace, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    preview_images: List[Tuple[Path, Image.Image]] = []
+    for root in roots:
+        dataset = ExtraDigitDataset(
+            Path(root),
+            auto_crop=not args.no_extra_auto_crop,
+            preprocess=args.extra_preprocess,
+            orientation=args.extra_orientation,
+            cache=True,
+        )
+        root_name = Path(root).name or "extra"
+        for index, (image, label) in enumerate(dataset.cached_images or []):
+            source = dataset.samples[index][0]
+            stem = f"{label}_{index:04d}_{source.stem}".replace(" ", "_")
+            out_path = output_dir / root_name / f"{stem}.pgm"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(out_path)
+            preview_images.append((out_path, image.copy()))
+        print(f"preview dataset: {root} samples={len(dataset)} output={output_dir / root_name}")
+
+    if preview_images:
+        write_contact_sheet(preview_images, output_dir / "contact_sheet.png")
+
+
+def write_contact_sheet(items: Sequence[Tuple[Path, Image.Image]], output_path: Path) -> None:
+    cell_w, cell_h = 116, 96
+    cols = min(6, max(1, len(items)))
+    rows = (len(items) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * cell_w, rows * cell_h), (235, 235, 235))
+    for index, (path, image) in enumerate(items):
+        cell = Image.new("RGB", (cell_w, cell_h), "white")
+        preview = image.resize((56, 56), Image.Resampling.NEAREST).convert("RGB")
+        cell.paste(preview, ((cell_w - preview.width) // 2, 4))
+        draw = ImageDraw.Draw(cell)
+        draw.text((4, 64), path.name[:18], fill=(0, 0, 0))
+        sheet.paste(cell, ((index % cols) * cell_w, (index // cols) * cell_h))
+    sheet.save(output_path)
+    print(f"preview contact sheet: {output_path}")
 
 
 def parse_digit_label(name: str) -> int | None:
@@ -399,10 +507,30 @@ def parse_digit_label_from_filename(name: str) -> int | None:
     return None
 
 
-def mnist_like_image(image: Image.Image, target_size: int = 28, digit_box_size: int = 20) -> Image.Image:
+def mnist_like_image(
+    image: Image.Image,
+    target_size: int = 28,
+    digit_box_size: int = 20,
+    mode: str = "auto",
+) -> Image.Image:
     gray = image.convert("L")
+    if mode == "pipeline":
+        return pipeline_mnist_like_image(gray, target_size=target_size, digit_box_size=digit_box_size)
+
+    gray = resize_for_preprocess(gray)
     array = np.asarray(gray, dtype=np.uint8)
-    mask = foreground_mask(array)
+    candidates: List[np.ndarray] = []
+
+    if mode in ("auto", "simple"):
+        candidates.append(foreground_mask(array))
+    if mode in ("auto", "ink"):
+        candidates.extend(ink_foreground_candidates(gray, array))
+    if not candidates:
+        raise ValueError(f"unknown extra preprocessing mode: {mode}")
+
+    scored = [(score_digit_mask(candidate), candidate) for candidate in candidates]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    mask = scored[0][1]
     ys, xs = np.where(mask)
     if len(xs) == 0 or len(ys) == 0:
         return ImageOps.autocontrast(gray.resize((target_size, target_size), Image.Resampling.BILINEAR))
@@ -418,12 +546,196 @@ def mnist_like_image(image: Image.Image, target_size: int = 28, digit_box_size: 
     return canvas
 
 
+def pipeline_mnist_like_image(image: Image.Image, target_size: int = 28, digit_box_size: int = 20) -> Image.Image:
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    try:
+        from yolo.save_pgm import digit_to_mnist_pgm
+    except ModuleNotFoundError as exc:
+        if exc.name == "cv2":
+            raise RuntimeError(
+                "--extra-preprocess pipeline requires opencv-python. "
+                "Install it in Colab with: pip install opencv-python"
+            ) from exc
+        raise
+
+    array = np.asarray(image, dtype=np.uint8)
+    output = digit_to_mnist_pgm(array, target_size=target_size, digit_box_size=digit_box_size)
+    return Image.fromarray(output)
+
+
+def resize_for_preprocess(image: Image.Image, max_side: int = 640) -> Image.Image:
+    longest = max(image.size)
+    if longest <= max_side:
+        return image
+    scale = max_side / float(longest)
+    size = (max(1, int(round(image.width * scale))), max(1, int(round(image.height * scale))))
+    return image.resize(size, Image.Resampling.BILINEAR)
+
+
 def foreground_mask(array: np.ndarray) -> np.ndarray:
     border = np.concatenate([array[0, :], array[-1, :], array[:, 0], array[:, -1]])
     threshold = otsu_threshold(array)
     if float(border.mean()) >= float(array.mean()):
-        return array < threshold
-    return array > threshold
+        return clean_digit_mask(array < threshold)
+    return clean_digit_mask(array > threshold)
+
+
+def ink_foreground_candidates(gray: Image.Image, array: np.ndarray) -> List[np.ndarray]:
+    radius = max(6, min(gray.size) // 18)
+    background = np.asarray(gray.filter(ImageFilter.GaussianBlur(radius=radius)), dtype=np.float32)
+    dark_strokes = np.clip(background - array.astype(np.float32), 0, 255).astype(np.uint8)
+    dark_threshold = max(8, otsu_threshold(dark_strokes), int(np.percentile(dark_strokes, 88)))
+    gray_threshold = int(np.percentile(array, 62))
+    candidates = [
+        dark_strokes > dark_threshold,
+        (dark_strokes > max(6, int(np.percentile(dark_strokes, 92)))) & (array < gray_threshold),
+        (array < min(otsu_threshold(array), int(np.percentile(array, 12)) + 12)) | (dark_strokes > dark_threshold),
+    ]
+    return [clean_digit_mask(candidate) for candidate in candidates]
+
+
+def clean_digit_mask(mask: np.ndarray) -> np.ndarray:
+    mask = mask.astype(bool, copy=False)
+    mask = mask & (neighbor_count(mask) >= 2)
+    mask = erode_mask(dilate_mask(mask))
+    mask = mask & (neighbor_count(mask) >= 3)
+    return keep_digit_components(mask)
+
+
+def neighbor_count(mask: np.ndarray) -> np.ndarray:
+    padded = np.pad(mask, 1, constant_values=False)
+    count = np.zeros(mask.shape, dtype=np.uint8)
+    for dy in range(3):
+        for dx in range(3):
+            count += padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
+    return count
+
+
+def dilate_mask(mask: np.ndarray) -> np.ndarray:
+    padded = np.pad(mask, 1, constant_values=False)
+    out = np.zeros(mask.shape, dtype=bool)
+    for dy in range(3):
+        for dx in range(3):
+            out |= padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
+    return out
+
+
+def erode_mask(mask: np.ndarray) -> np.ndarray:
+    padded = np.pad(mask, 1, constant_values=True)
+    out = np.ones(mask.shape, dtype=bool)
+    for dy in range(3):
+        for dx in range(3):
+            out &= padded[dy : dy + mask.shape[0], dx : dx + mask.shape[1]]
+    return out
+
+
+def keep_digit_components(mask: np.ndarray) -> np.ndarray:
+    components = connected_components(mask)
+    if not components:
+        return mask
+
+    height, width = mask.shape
+    image_area = max(1, height * width)
+    max_area = max(component[0] for component in components)
+    kept = np.zeros_like(mask, dtype=bool)
+    for area, x1, y1, x2, y2, points in components:
+        box_w = x2 - x1
+        box_h = y2 - y1
+        area_frac = area / image_area
+        width_frac = box_w / max(1, width)
+        height_frac = box_h / max(1, height)
+        touches_edges = int(x1 <= 1) + int(y1 <= 1) + int(x2 >= width - 1) + int(y2 >= height - 1)
+
+        if area < max(6, int(max_area * 0.08)) and area_frac < 0.001:
+            continue
+        if box_w < 2 or box_h < 2:
+            continue
+        if touches_edges >= 2 and (width_frac > 0.55 or height_frac > 0.55):
+            continue
+        if area_frac > 0.45:
+            continue
+
+        for y, x in points:
+            kept[y, x] = True
+
+    if np.count_nonzero(kept) == 0:
+        largest = max(components, key=lambda item: item[0])
+        for y, x in largest[5]:
+            kept[y, x] = True
+    return kept
+
+
+def connected_components(mask: np.ndarray) -> List[Tuple[int, int, int, int, int, List[Tuple[int, int]]]]:
+    height, width = mask.shape
+    seen = np.zeros_like(mask, dtype=bool)
+    components: List[Tuple[int, int, int, int, int, List[Tuple[int, int]]]] = []
+    ys, xs = np.where(mask)
+    for start_y, start_x in zip(ys.tolist(), xs.tolist()):
+        if seen[start_y, start_x] or not mask[start_y, start_x]:
+            continue
+
+        stack = [(start_y, start_x)]
+        seen[start_y, start_x] = True
+        points: List[Tuple[int, int]] = []
+        while stack:
+            y, x = stack.pop()
+            points.append((y, x))
+            for ny in range(y - 1, y + 2):
+                for nx in range(x - 1, x + 2):
+                    if ny == y and nx == x:
+                        continue
+                    if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not seen[ny, nx]:
+                        seen[ny, nx] = True
+                        stack.append((ny, nx))
+
+        point_array = np.asarray(points)
+        y1, x1 = point_array.min(axis=0)
+        y2, x2 = point_array.max(axis=0) + 1
+        components.append((len(points), int(x1), int(y1), int(x2), int(y2), points))
+    return components
+
+
+def score_digit_mask(mask: np.ndarray) -> float:
+    ys, xs = np.where(mask)
+    if len(xs) == 0 or len(ys) == 0:
+        return -1_000.0
+
+    height, width = mask.shape
+    image_area = max(1, height * width)
+    area_frac = len(xs) / image_area
+    x1, x2 = xs.min(), xs.max() + 1
+    y1, y2 = ys.min(), ys.max() + 1
+    bbox_w = (x2 - x1) / max(1, width)
+    bbox_h = (y2 - y1) / max(1, height)
+    aspect = bbox_w / max(0.01, bbox_h)
+    bbox_area = max(1, (x2 - x1) * (y2 - y1))
+    fill_ratio = len(xs) / bbox_area
+    border_pixels = (
+        np.count_nonzero(mask[0, :])
+        + np.count_nonzero(mask[-1, :])
+        + np.count_nonzero(mask[:, 0])
+        + np.count_nonzero(mask[:, -1])
+    )
+    border_penalty = border_pixels / max(1, 2 * (height + width))
+
+    score = 0.0
+    score += min(area_frac, 0.25) * 6.0
+    score += min(bbox_w, 0.90) + min(bbox_h, 0.90)
+    score -= border_penalty * 2.0
+
+    if area_frac < 0.0004 or area_frac > 0.45:
+        score -= 3.0
+    if fill_ratio > 0.65:
+        score -= 2.0
+    elif 0.03 <= fill_ratio <= 0.45:
+        score += 0.5
+    if bbox_w < 0.04 or bbox_h < 0.08:
+        score -= 1.0
+    if aspect > 3.0 or aspect < 0.08:
+        score -= 1.0
+    return score
 
 
 def otsu_threshold(array: np.ndarray) -> int:
@@ -449,6 +761,36 @@ def otsu_threshold(array: np.ndarray) -> int:
             best_variance = variance
             best_threshold = threshold
     return int(best_threshold)
+
+
+def resolve_project_path(path: str, project_root: Path) -> Path:
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = project_root / resolved
+    return resolved
+
+
+def load_bins(model: LeNetForCUDNN, bin_dir: Path) -> None:
+    tensors = {
+        "conv1.bin": model.conv1.weight,
+        "conv1.bias.bin": model.conv1.bias,
+        "conv2.bin": model.conv2.weight,
+        "conv2.bias.bin": model.conv2.bias,
+        "ip1.bin": model.fc1.weight,
+        "ip1.bias.bin": model.fc1.bias,
+        "ip2.bin": model.fc2.weight,
+        "ip2.bias.bin": model.fc2.bias,
+    }
+    for name, tensor in tensors.items():
+        path = bin_dir / name
+        if not path.exists():
+            raise FileNotFoundError(path)
+        expected_values = tensor.numel()
+        array = np.fromfile(path, dtype=np.float32)
+        if array.size != expected_values:
+            raise RuntimeError(f"{path} has {array.size} float32 values; expected {expected_values}")
+        loaded = torch.from_numpy(array.reshape(tuple(tensor.shape))).to(device=tensor.device, dtype=tensor.dtype)
+        tensor.data.copy_(loaded)
 
 
 def export_bins(model: LeNetForCUDNN, export_dir: Path, overwrite: bool) -> None:
@@ -505,6 +847,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extra-data-root", action="append", default=[], help="Labeled digit folders to mix in.")
     parser.add_argument("--eval-data-root", action="append", default=[], help="Labeled digit folders for evaluation.")
     parser.add_argument("--extra-repeat", type=int, default=5, help="Oversampling factor for extra data.")
+    parser.add_argument("--extra-preprocess", default="auto", choices=["auto", "simple", "ink", "pipeline"])
+    parser.add_argument("--extra-orientation", default="exif", choices=["exif", "raw"])
+    parser.add_argument("--extra-augment", action="store_true", help="Apply random affine augmentation to extra data.")
+    parser.add_argument("--extra-augment-degrees", type=float, default=8.0)
+    parser.add_argument("--extra-augment-translate", type=float, default=0.06)
+    parser.add_argument("--extra-augment-scale", type=float, default=0.08)
+    parser.add_argument("--extra-augment-shear", type=float, default=4.0)
+    parser.add_argument("--preview-extra-dir", help="Write preprocessed extra-data PGM previews before training.")
+    parser.add_argument("--preview-only", action="store_true", help="Only write extra-data previews; do not train.")
     parser.add_argument("--no-extra-auto-crop", action="store_true")
     parser.add_argument("--no-extra-cache", action="store_true", help="Do not cache extra images after preprocessing.")
     parser.add_argument("--no-emnist-orientation-fix", action="store_true")
@@ -522,6 +873,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--device", default="")
+    parser.add_argument("--init-bin-dir", help="Initialize the model from an existing mnistCUDNN data/*.bin directory.")
+    parser.add_argument("--eval-initial", action="store_true", help="Evaluate initialized weights before training.")
+    parser.add_argument("--min-test-accuracy", type=float, default=0.0, help="Refuse export if EMNIST test accuracy is lower.")
     parser.add_argument("--export-dir", default="trained_weights/emnist_digits")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--backup-existing", action="store_true")

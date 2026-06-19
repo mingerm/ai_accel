@@ -133,6 +133,12 @@ python3 yolo/detect_images.py --image-dir /path/to/image_folder --output-dir pgm
 The C++ runner reads raw float32 weight files from `data/*.bin`. Train a
 compatible LeNet model in PyTorch, then export those files:
 
+For Colab fine-tuning with the local `extra/6` and `extra/8` images while
+starting from the current runtime `.bin` files, see `COLAB_TRAINING.md`.
+Use `scripts/make_extra_pgm_dataset.py` first if the raw photo preview is noisy;
+it writes a labeled `datasets/extra_pgm_ink/` folder of 28x28 PGM training
+images that can be passed to `train_emnist_lenet.py --no-extra-auto-crop`.
+
 ```bash
 python3 -m pip install -r requirements-training.txt
 python3 scripts/train_emnist_lenet.py \

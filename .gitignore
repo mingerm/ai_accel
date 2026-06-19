@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.mp4
+mnist_colab_aug68.zip
 
 mnistCUDNN/__pycache__/
 mnistCUDNN/**/__pycache__/
