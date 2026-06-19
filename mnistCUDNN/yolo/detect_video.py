@@ -66,6 +66,7 @@ def main() -> int:
         min_frames_between_saves=int(config.get("min_frames_between_saves", 8)),
         allow_same_label_motion_split=as_bool(config.get("allow_same_label_motion_split", False)),
         same_label_center_distance=float(config.get("same_label_center_distance", 0.45)),
+        label_change_center_distance=float(config.get("label_change_center_distance", 0.18)),
     )
 
     frame_index = 0
@@ -79,6 +80,7 @@ def main() -> int:
     digit_box_size = int(config.get("digit_box_size", 20))
     bbox_padding = float(config.get("bbox_padding", 0.18))
     selection = str(config.get("selection", "center_conf"))
+    save_debug_crops = as_bool(config.get("save_debug_crops", False))
 
     while True:
         ok, frame = capture.read()
@@ -113,6 +115,13 @@ def main() -> int:
                 f"conf_{detection.confidence:.2f}_{decision.segment_index:04d}.pgm"
             )
             save_pgm(output_dir / name, pgm_image)
+            if save_debug_crops:
+                debug_dir = output_dir / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                stem = Path(name).stem
+                cv2.imwrite(str(debug_dir / f"{stem}_crop.png"), crop)
+                preview = cv2.resize(pgm_image, (280, 280), interpolation=cv2.INTER_NEAREST)
+                cv2.imwrite(str(debug_dir / f"{stem}_pgm_preview.png"), preview)
             saved += 1
             print(
                 f"SAVED {output_dir / name} "

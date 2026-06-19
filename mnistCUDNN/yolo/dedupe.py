@@ -31,12 +31,14 @@ class SegmentTracker:
         min_frames_between_saves: int = 8,
         allow_same_label_motion_split: bool = False,
         same_label_center_distance: float = 0.45,
+        label_change_center_distance: float = 0.18,
     ) -> None:
         self.min_stable_frames = max(1, int(min_stable_frames))
         self.missing_frames_to_close_segment = max(1, int(missing_frames_to_close_segment))
         self.min_frames_between_saves = max(1, int(min_frames_between_saves))
         self.allow_same_label_motion_split = bool(allow_same_label_motion_split)
         self.same_label_center_distance = float(same_label_center_distance)
+        self.label_change_center_distance = float(label_change_center_distance)
 
         self.active_label: Optional[int] = None
         self.active_bbox: Optional[BBox] = None
@@ -82,6 +84,15 @@ class SegmentTracker:
             return self._save(detection, "new_segment")
 
         if detection.label != self.active_label:
+            if self.frames_since_save < self.min_frames_between_saves:
+                return SegmentDecision(False, self.segment_index, "save_cooldown")
+            if (
+                self.active_bbox is not None
+                and self._center_distance(detection.bbox, self.active_bbox, frame_width, frame_height)
+                < self.label_change_center_distance
+            ):
+                self.active_bbox = detection.bbox
+                return SegmentDecision(False, self.segment_index, "label_jitter_same_object")
             return self._save(detection, "label_changed")
 
         if (
