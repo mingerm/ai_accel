@@ -66,17 +66,31 @@ class LeNetForCUDNN(nn.Module):
 
 
 class ExtraDigitDataset(Dataset[Tuple[torch.Tensor, int]]):
-    def __init__(self, root: Path, auto_crop: bool = True, recursive: bool = True) -> None:
+    def __init__(
+        self,
+        root: Path,
+        auto_crop: bool = True,
+        recursive: bool = True,
+        cache: bool = True,
+    ) -> None:
         self.samples = collect_digit_samples(root, recursive=recursive)
         self.auto_crop = auto_crop
+        self.cached_samples: List[Tuple[torch.Tensor, int]] | None = None
         if not self.samples:
             raise ValueError(f"no labeled digit images found under {root}")
+        if cache:
+            self.cached_samples = [self.load_sample(path, label) for path, label in self.samples]
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
-        path, label = self.samples[index]
+        if self.cached_samples is not None:
+            image, label = self.cached_samples[index]
+            return image.clone(), label
+        return self.load_sample(*self.samples[index])
+
+    def load_sample(self, path: Path, label: int) -> Tuple[torch.Tensor, int]:
         image = Image.open(path).convert("L")
         if self.auto_crop:
             image = mnist_like_image(image)
@@ -119,7 +133,11 @@ def main() -> int:
 
     eval_loaders: List[Tuple[str, DataLoader[Tuple[torch.Tensor, int]]]] = [("emnist_test", test_loader)]
     for eval_root in args.eval_data_root:
-        dataset = ExtraDigitDataset(Path(eval_root), auto_crop=not args.no_extra_auto_crop)
+        dataset = ExtraDigitDataset(
+            Path(eval_root),
+            auto_crop=not args.no_extra_auto_crop,
+            cache=not args.no_extra_cache,
+        )
         eval_loaders.append(
             (
                 f"extra:{eval_root}",
@@ -215,7 +233,11 @@ def build_datasets(args: argparse.Namespace) -> Tuple[Dataset[Tuple[torch.Tensor
 
     datasets_to_concat: List[Dataset[Tuple[torch.Tensor, int]]] = [train_dataset]
     for extra_root in args.extra_data_root:
-        extra_dataset = ExtraDigitDataset(Path(extra_root), auto_crop=not args.no_extra_auto_crop)
+        extra_dataset = ExtraDigitDataset(
+            Path(extra_root),
+            auto_crop=not args.no_extra_auto_crop,
+            cache=not args.no_extra_cache,
+        )
         print(f"extra dataset: {extra_root} samples={len(extra_dataset)} repeat={args.extra_repeat}")
         for _ in range(args.extra_repeat):
             datasets_to_concat.append(extra_dataset)
@@ -390,7 +412,7 @@ def mnist_like_image(image: Image.Image, target_size: int = 28, digit_box_size: 
     scale = min(digit_box_size / max(1, w), digit_box_size / max(1, h))
     new_w = max(1, int(round(w * scale)))
     new_h = max(1, int(round(h * scale)))
-    digit = Image.fromarray(cropped, mode="L").resize((new_w, new_h), Image.Resampling.BILINEAR)
+    digit = Image.fromarray(cropped).resize((new_w, new_h), Image.Resampling.BILINEAR)
     canvas = Image.new("L", (target_size, target_size), 0)
     canvas.paste(digit, ((target_size - new_w) // 2, (target_size - new_h) // 2))
     return canvas
@@ -484,6 +506,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-data-root", action="append", default=[], help="Labeled digit folders for evaluation.")
     parser.add_argument("--extra-repeat", type=int, default=5, help="Oversampling factor for extra data.")
     parser.add_argument("--no-extra-auto-crop", action="store_true")
+    parser.add_argument("--no-extra-cache", action="store_true", help="Do not cache extra images after preprocessing.")
     parser.add_argument("--no-emnist-orientation-fix", action="store_true")
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--augment-degrees", type=float, default=10.0)

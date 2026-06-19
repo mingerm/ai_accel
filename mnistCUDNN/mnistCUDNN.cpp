@@ -1370,7 +1370,6 @@ class network_t
         timing.image = fname;
         currentTiming = &timing;
         currentImage = fname;
-        HostTimePoint image_start = HostClock::now();
 
         HostTimePoint io_start = HostClock::now();
         readImage(fname, imgData_h, verbose);
@@ -1395,6 +1394,7 @@ class network_t
 
         srcData = scratchA;
         n = c = 1; h = IMAGE_H; w = IMAGE_W;
+        HostTimePoint infer_start = HostClock::now();
         convoluteForward(conv1, n, c, h, w, srcData, &scratchB, &scratchBCapacity, "conv1");
         dstData = scratchB;
         poolForward(n, c, h, w, dstData, &scratchA, &scratchACapacity, "pool1");
@@ -1416,6 +1416,8 @@ class network_t
         srcData = scratchA;
         softmaxForward(n, c, h, w, srcData, &scratchB, &scratchBCapacity, "softmax");
         dstData = scratchB;
+        checkCudaErrors(cudaDeviceSynchronize());
+        HostTimePoint infer_end = HostClock::now();
 
         const int max_digits = 10;
         // Take care of half precision
@@ -1442,7 +1444,7 @@ class network_t
         }
 
         timing.prediction = id;
-        timing.total_ms = elapsedMs(image_start, HostClock::now());
+        timing.total_ms = elapsedMs(infer_start, infer_end);
         if (profiler != NULL && profiler->enabled())
         {
             profiler->writeImage(timing);
