@@ -81,6 +81,15 @@ def main() -> int:
     bbox_padding = float(config.get("bbox_padding", 0.18))
     selection = str(config.get("selection", "center_conf"))
     save_debug_crops = as_bool(config.get("save_debug_crops", False))
+    save_gate = SaveGate(
+        require_fully_visible=as_bool(config.get("require_fully_visible", False)),
+        min_edge_margin=float(config.get("min_edge_margin", 0.0) or 0.0),
+        require_centered=as_bool(config.get("require_centered", False)),
+        center_x_min=float(config.get("center_x_min", 0.0) or 0.0),
+        center_x_max=float(config.get("center_x_max", 1.0) or 1.0),
+        center_y_min=float(config.get("center_y_min", 0.0) or 0.0),
+        center_y_max=float(config.get("center_y_max", 1.0) or 1.0),
+    )
 
     while True:
         ok, frame = capture.read()
@@ -97,22 +106,23 @@ def main() -> int:
             selection=selection,
         )
         height, width = frame.shape[:2]
-        decision = tracker.update(detection, width, height)
+        gated_detection, gate_reason = save_gate.apply(detection, width, height)
+        decision = tracker.update(gated_detection, width, height)
 
         now = time.time()
         fps = 1.0 / (now - prev_time) if prev_time else 0.0
         prev_time = now
 
-        if decision.should_save and detection is not None:
-            crop = crop_digit(frame, detection.bbox, padding=bbox_padding)
+        if decision.should_save and gated_detection is not None:
+            crop = crop_digit(frame, gated_detection.bbox, padding=bbox_padding)
             pgm_image = digit_to_mnist_pgm(
                 crop,
                 target_size=target_size,
                 digit_box_size=digit_box_size,
             )
             name = (
-                f"frame_{frame_index:06d}_digit_{detection.label}_"
-                f"conf_{detection.confidence:.2f}_{decision.segment_index:04d}.pgm"
+                f"frame_{frame_index:06d}_digit_{gated_detection.label}_"
+                f"conf_{gated_detection.confidence:.2f}_{decision.segment_index:04d}.pgm"
             )
             save_pgm(output_dir / name, pgm_image)
             if save_debug_crops:
@@ -125,7 +135,7 @@ def main() -> int:
             saved += 1
             print(
                 f"SAVED {output_dir / name} "
-                f"label={detection.label} conf={detection.confidence:.3f} "
+                f"label={gated_detection.label} conf={gated_detection.confidence:.3f} "
                 f"reason={decision.reason}"
             )
 
@@ -133,7 +143,7 @@ def main() -> int:
                 break
 
         if display:
-            annotated = draw_live_frame(frame, detection, fps, saved)
+            annotated = draw_live_frame(frame, detection, fps, saved, gate_reason)
             try:
                 cv2.imshow(window_title, annotated)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -151,6 +161,53 @@ def main() -> int:
         cv2.destroyAllWindows()
     print(f"YOLO summary: frames={frame_index} saved={saved} output_dir={output_dir}")
     return 0
+
+
+class SaveGate:
+    def __init__(
+        self,
+        require_fully_visible: bool,
+        min_edge_margin: float,
+        require_centered: bool,
+        center_x_min: float,
+        center_x_max: float,
+        center_y_min: float,
+        center_y_max: float,
+    ) -> None:
+        self.require_fully_visible = require_fully_visible
+        self.min_edge_margin = max(0.0, min(0.45, min_edge_margin))
+        self.require_centered = require_centered
+        self.center_x_min = max(0.0, min(1.0, center_x_min))
+        self.center_x_max = max(0.0, min(1.0, center_x_max))
+        self.center_y_min = max(0.0, min(1.0, center_y_min))
+        self.center_y_max = max(0.0, min(1.0, center_y_max))
+
+    def apply(
+        self,
+        detection: Optional[Detection],
+        frame_width: int,
+        frame_height: int,
+    ) -> tuple[Optional[Detection], str]:
+        if detection is None:
+            return None, "no_detection"
+
+        x1, y1, x2, y2 = detection.bbox
+        width = max(1, frame_width)
+        height = max(1, frame_height)
+
+        if self.require_fully_visible:
+            margin_x = width * self.min_edge_margin
+            margin_y = height * self.min_edge_margin
+            if x1 < margin_x or y1 < margin_y or x2 > width - margin_x or y2 > height - margin_y:
+                return None, "waiting_full_digit"
+
+        if self.require_centered:
+            cx = (x1 + x2) * 0.5 / width
+            cy = (y1 + y2) * 0.5 / height
+            if not (self.center_x_min <= cx <= self.center_x_max and self.center_y_min <= cy <= self.center_y_max):
+                return None, "waiting_center"
+
+        return detection, "ready"
 
 
 def choose_source(args: argparse.Namespace, config: Dict[str, Any]) -> int | Path:
@@ -215,7 +272,13 @@ def detect_one(
     return select_detection(detections, frame.shape[1], frame.shape[0], selection)
 
 
-def draw_live_frame(frame: Any, detection: Optional[Detection], fps: float, saved: int) -> Any:
+def draw_live_frame(
+    frame: Any,
+    detection: Optional[Detection],
+    fps: float,
+    saved: int,
+    gate_reason: str,
+) -> Any:
     annotated = frame.copy()
     if detection is not None:
         x1, y1, x2, y2 = [int(round(v)) for v in detection.bbox]
@@ -249,6 +312,16 @@ def draw_live_frame(frame: Any, detection: Optional[Detection], fps: float, save
         (0, 255, 255),
         2,
     )
+    if gate_reason not in {"ready", "no_detection"}:
+        cv2.putText(
+            annotated,
+            gate_reason,
+            (20, 114),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 180, 255),
+            2,
+        )
     return annotated
 
 

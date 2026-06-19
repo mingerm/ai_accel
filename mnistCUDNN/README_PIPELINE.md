@@ -206,6 +206,8 @@ MNIST_INPUT_PATH=data/input.pgm MNIST_COMMAND='./mnistCUDNN image={pgm}' ./run_p
 
 Tune these values in `yolo/config.yaml`:
 
+- `require_fully_visible`, `min_edge_margin`: wait until a digit is away from the frame edge before saving.
+- `require_centered`, `center_x_min`, `center_x_max`: wait until a digit reaches the center region before saving.
 - `min_stable_frames`: frames required before saving a new digit.
 - `missing_frames_to_close_segment`: frames without detection before a segment ends.
 - `min_frames_between_saves`: guard interval between saved PGM files.

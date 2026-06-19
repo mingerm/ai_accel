@@ -16,6 +16,17 @@ camera_height: 0
 camera_fps: 0
 max_frames: 0
 
+# Wait until a detected digit is fully visible and near the center before
+# starting the segment save timer. This avoids saving half-visible digits as
+# they enter from the left/right edge of the camera frame.
+require_fully_visible: true
+min_edge_margin: 0.06
+require_centered: true
+center_x_min: 0.30
+center_x_max: 0.70
+center_y_min: 0.15
+center_y_max: 0.85
+
 target_size: 28
 digit_box_size: 20
 bbox_padding: 0.30
